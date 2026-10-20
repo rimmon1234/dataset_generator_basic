@@ -407,10 +407,23 @@ def create_ui():
                     explorer_file_box = gr.Textbox(label="Dataset File", value="synthetic_dataset.jsonl", scale=3)
                     refresh_btn = gr.Button("🔄 Refresh All Data", scale=1)
 
-                stats_markdown = gr.Markdown("**Dataset Metrics:** Loading...")
+                stats_text, initial_diff_df, initial_cat_df = compute_dataset_stats("synthetic_dataset.jsonl")
+                stats_markdown = gr.Markdown(stats_text)
                 with gr.Row():
-                    difficulty_table = gr.Dataframe(label="Difficulty Distribution", interactive=False)
-                    category_table = gr.Dataframe(label="Category Distribution", interactive=False)
+                    difficulty_plot = gr.BarPlot(
+                        value=initial_diff_df,
+                        x="Difficulty",
+                        y="Count",
+                        title="Difficulty Balance",
+                        tooltip=["Difficulty", "Count"]
+                    )
+                    category_plot = gr.BarPlot(
+                        value=initial_cat_df,
+                        x="Category",
+                        y="Count",
+                        title="Category Distribution",
+                        tooltip=["Category", "Count"]
+                    )
 
                 gr.Markdown("### 🗃️ Accepted Dataset Samples")
                 dataset_table = gr.Dataframe(
@@ -525,7 +538,7 @@ def create_ui():
         refresh_btn.click(
             fn=refresh_all,
             inputs=[explorer_file_box],
-            outputs=[dataset_table, rejections_table, stats_markdown, difficulty_table, category_table]
+            outputs=[dataset_table, rejections_table, stats_markdown, difficulty_plot, category_plot]
         )
 
         download_jsonl_btn.click(
