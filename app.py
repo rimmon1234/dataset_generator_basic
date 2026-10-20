@@ -312,6 +312,15 @@ def export_as_json(file_path: str):
         json.dump(records, f, indent=2, ensure_ascii=False)
     return str(export_path)
 
+def export_as_csv(file_path: str):
+    from export_tabular import convert_jsonl_to_tabular
+    try:
+        out = convert_jsonl_to_tabular(file_path, "csv")
+        return str(out) if out else None
+    except Exception as e:
+        print(f"Error exporting CSV: {e}")
+        return None
+
 # Build the Gradio UI
 def create_ui():
     topic_options = ["Random from Seed List"] + SEED_TOPICS
@@ -445,6 +454,7 @@ def create_ui():
                 with gr.Row():
                     download_jsonl_btn = gr.Button("📥 Download as JSONL")
                     download_json_btn = gr.Button("📥 Export as Formatted JSON")
+                    download_csv_btn = gr.Button("📊 Export as Tabular CSV")
 
                 file_download_component = gr.File(label="Download File", interactive=False)
 
@@ -549,6 +559,12 @@ def create_ui():
 
         download_json_btn.click(
             fn=export_as_json,
+            inputs=[explorer_file_box],
+            outputs=[file_download_component]
+        )
+
+        download_csv_btn.click(
+            fn=export_as_csv,
             inputs=[explorer_file_box],
             outputs=[file_download_component]
         )

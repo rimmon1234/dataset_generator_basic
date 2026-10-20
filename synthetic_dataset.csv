@@ -1,0 +1,419 @@
+id,category,difficulty,seed_topic,instruction,input,output,model_id,review_status
+synth_2f285c0c1633,,,Evaluating LLM generation with G-Eval or LLM-as-a-judge,"Evaluate the quality of a generated code snippet using G-Eval or LLM-as-a-judge, and provide a score along with a brief explanation.",Generate a Python function that calculates the factorial of a number using recursion.,"Score: 4/5
+
+Explanation: The function is well-structured and correctly implements recursion. However, it lacks a base case for the recursion, which is essential for proper termination. The function will result in a stack overflow for large inputs. A better implementation would include a base case and handle edge cases (e.g., 0 and 1).",Qwen/Qwen3-1.7B,
+synth_43fb35cb431a,,,Distributed tracing with OpenTelemetry in microservices,"Implement a distributed tracing system using OpenTelemetry in a microservice architecture, focusing on capturing trace context and metrics across services.","A basic OpenTelemetry setup with a single service, no external dependencies, and no configuration provided.","```python
+import opentelemetry.sdk.trace as trace
+import opentelemetry.sdk.metrics as metrics
+import opentelemetry.sdk.trace.trace_context as trace_context
+import opentelemetry.instrumentation.stdlib.stdlib_instrumentor
+import logging
+
+# Initialize the OpenTelemetry SDK
+otel_logger = logging.getLogger(__name__)
+otel_logger.setLevel(logging.INFO)
+
+# Instrumentor for standard libraries
+instrumentor = stdlib_instrumentor.Instrumentor()
+instrumentor.instrument()
+
+# Create a trace provider
+trace_provider = trace.TraceProvider()
+trace_provider.initialize()
+
+# Create a metric provider
+metric_provider = metrics.MetricProvider()
+metric_provider.initialize()
+
+# Create a trace context manager
+trace_context_manager = trace_context.TraceContextManager()
+trace_context_manager.initialize()
+
+# Example service
+async def process_request(request):
+    # Start a new span
+    span = trace_provider.start_span(
+        name='process_request',
+        trace_id='trace_id_123',
+        span_id='span_id_456',
+        parent_span_id='parent_span_id_789'
+    )
+
+    try:
+        # Simulate a request
+        await asyncio.sleep(0.1)
+
+        # End the span
+        span.end()
+    except Exception as e:
+        span.set_status(trace_context.Status.ERROR)
+        span.end()
+
+# Main entry point
+async def main():
+    # Start the trace
+    trace_context_manager.start_trace()
+    try:
+        await process_request(None)
+    finally:
+        trace_context_manager.end_trace()
+
+# Run the application
+if __name__ == '__main__':
+    asyncio.run(main())
+```",Qwen/Qwen3-1.7B,
+synth_b07cd10e2da3,,,Error handling and custom exception hierarchies,"Design a custom exception hierarchy for handling errors in a file upload system, including specific exceptions for file not found, invalid file type, and connection errors. Provide an example of how to raise and catch these exceptions in a Python function.",,"```python
+class FileUploadError(Exception):
+    pass
+
+class FileNotFoundError(FileUploadError):
+    def __init__(self, message, file_path):
+        super().__init__(message)
+        self.file_path = file_path
+
+class InvalidFileTypeError(FileUploadError):
+    def __init__(self, message, file_type):
+        super().__init__(message)
+        self.file_type = file_type
+
+class ConnectionError(FileUploadError):
+    def __init__(self, message, url):
+        super().__init__(message)
+        self.url = url
+
+async def upload_file(file_path, allowed_types, server_url):
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read()
+            # Simulate file reading
+            if not content:
+                raise FileNotFoundError(f'Empty file at {file_path}')
+
+            # Check file type
+            if not file_path.endswith('.txt'):
+                raise InvalidFileTypeError(f'File type {file_path} is not allowed. Must be .txt.', file_path)
+
+            # Simulate network request
+            await asyncio.sleep(1)
+            if server_url != 'example.com':  # Simulate connection error
+                raise ConnectionError(f'Connection failed to {server_url}', server_url)
+
+            return 'Upload successful'
+    except FileNotFoundError as e:
+        raise e
+    except InvalidFileTypeError as e:
+        raise e
+    except ConnectionError as e:
+        raise e
+    except Exception as e:
+        raise FileUploadError(f'An unknown error occurred: {str(e)}')
+
+# Example usage
+async def main():
+    try:
+        result = await upload_file('example.txt', ['txt'], 'example.com')
+        print(result)
+    except FileUploadError as e:
+        print(f'File upload error: {str(e)}')
+    except Exception as e:
+        print(f'Unexpected error: {str(e)}')
+
+asyncio.run(main())
+```",Qwen/Qwen3-1.7B,rejected
+synth_23107c23d4b0,,,Cache invalidation patterns and stampede prevention,"Design an asynchronous cache invalidation mechanism that prevents cache stampedes in a distributed system, using Redis as the cache backend.","class CacheManager:
+    def __init__(self, redis_client):
+        self.redis_client = redis_client
+
+    def get(self, key):
+        return self.redis_client.get(key)
+
+    def set(self, key, value, expire_in_seconds=300):
+        self.redis_client.setex(key, expire_in_seconds, value)
+
+    def invalidate(self, key):
+        self.redis_client.delete(key)","```python
+import asyncio
+import redis
+
+class AsyncCacheManager:
+    def __init__(self, redis_url, redis_db=0):
+        self.redis_client = redis.Redis(host='localhost', port=6379, db=redis_db, ssl=False, decode_responses=True)
+
+    async def get(self, key):
+        val = await self.redis_client.get(key)
+        return val
+
+    async def set(self, key, value, expire_in_seconds=300):
+        await self.redis_client.setex(key, expire_in_seconds, value)
+
+    async def invalidate(self, key):
+        await self.redis_client.delete(key)
+
+    async def async_get(self, key):
+        val = await self.get(key)
+        if val is None:
+            await self.invalidate(key)
+            val = await self.get(key)
+        return val
+
+    async def batch_get(self, keys):
+        results = await asyncio.gather(
+            *(self.async_get(k) for k in keys)
+        )
+        return results
+
+    async def batch_set(self, keys, values, expire_in_seconds=300):
+        await asyncio.gather(
+            *(self.set(k, v, expire_in_seconds) for k, v in zip(keys, values))
+        )
+
+    async def batch_invalidate(self, keys):
+        await asyncio.gather(
+            *(self.invalidate(k) for k in keys)
+        )
+
+    # Example usage:
+    # async def example_usage():
+    #     async with AsyncCacheManager(redis_url='redis://localhost:6379/0') as manager:
+    #         result = await manager.async_get('example_key')
+    #         print(result)
+    #         await manager.batch_set(['example_key', 'another_key'], ['value1', 'value2'], 600)
+    #         await manager.batch_invalidate(['example_key', 'another_key'])
+    #         new_result = await manager.async_get('example_key')
+    #         print(new_result)
+```",Qwen/Qwen3-1.7B,
+synth_d08dd08899cc,,,Cache invalidation patterns and stampede prevention,Design a cache invalidation strategy to prevent cache stampedes in a distributed system with multiple clients and a centralized cache.,"class CacheManager:
+    def __init__(self, cache_size):
+        self.cache = {} 
+        self.cache_size = cache_size
+
+    def get(self, key):
+        if key in self.cache and len(self.cache) < self.cache_size:
+            return self.cache[key]
+        else:
+            return None
+
+    def set(self, key, value):
+        if len(self.cache) >= self.cache_size:
+            # Evict least recently used item
+            lrucache = self.cache.copy()
+            lrucache.pop(min(lrucache, key=lrucache.get))
+            self.cache = lrucache
+        self.cache[key] = value
+
+    def invalidate(self, key):
+        if key in self.cache:
+            del self.cache[key]","```python
+class CacheManager:
+    def __init__(self, cache_size, timestamp_ttl=3600):  # 1 hour
+        self.cache = {",Qwen/Qwen3-1.7B,
+synth_86f6c41f8b04,Distributed Tracing & Microservices,intermediate,Distributed tracing with OpenTelemetry in microservices,Design an OpenTelemetry-based tracing system for a microservice architecture with multiple services and rate limiting.,A Python-based microservice with a simple rate-limiting mechanism using `ratelimit` library.,"```python
+import opentelemetry as otel
+from opentelemetry import metrics
+from opentelemetry.exporter.otlp.proto.grpc import otlp_exporter
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import Tracer
+from opentelemetry.sdk.metrics import Metrics
+from opentelemetry.sdk.metrics import MetricsProvider
+
+# Initialize the tracer provider
+tracer_provider = TracerProvider()
+tracer = tracer_provider.get_tracer(""my-app"")
+metrics_provider = MetricsProvider()
+metrics = metrics_provider.get_metrics()
+
+# Configure Otel exporter for OTLP
+exporter = otlp_exporter.OTLPEndExporter(
+    endpoint=""otlp://otlp.googleapis.com/v1:1"", 
+    headers={""content-type"": ""application/grpc-web""}
+)
+
+# Configure the tracer with the exporter
+otel.init(
+    tracer_provider=tracer_provider,
+    exporter=exporter,
+    metrics_provider=metrics_provider
+)
+
+# Example trace span
+with tracer.start_span(""process_request"", description=""Handling a request"", child_of=tracer.get_current_span()) as span:
+    # Simulate a request
+    with metrics.start_timer(""request_latency"") as timer:
+        # Simulate a delay
+        asyncio.get_event_loop().run_in_executor(
+            None, 
+            lambda: asyncio.sleep(0.1, exc_info=True)
+        )
+        # Log the result
+        span.set_status(otel.StatusCode.SUCCESS)
+        span.end()
+
+# Rate limiting example
+from ratelimit import rate_limit
+
+@rate_limit(limit=5, period=10)  # 5 requests per 10 seconds
+def handle_request(
+    req: Request, 
+    trace_id: str, 
+    span: Span, 
+    metrics: Metrics
+):
+    # Tracing logic here
+    pass
+
+# Example usage
+async def process_request(
+    req: Request, 
+    trace_id: str, 
+    span: Span, 
+    metrics: Metrics
+):
+    # Tracing and rate limiting logic here
+    pass
+
+# This is a simplified example; in practice, you would integrate this into a microservice framework.
+```
+
+### Notes:
+- This example includes a basic tracer and metrics system.
+- The rate-limiting is simulated with the `ratelimit` library.
+- The trace is started and ended within a span, and metrics are tracked.
+- The exporter is configured for OTLP, which can be adapted to other exporters like Jaeger or Prometheus.",Qwen/Qwen3-1.7B,pending_review
+synth_c924b3b9128e,Python Systems,intermediate,Python memory management and garbage collection,Optimize this code for memory efficiency in a concurrent web scraping application using asyncio and garbage collection.,"import asyncio
+import aiohttp
+
+async def fetch(session, url):
+    async with session.get(url) as response:
+        return await response.text()
+
+async def scrape(url):
+    async with aiohttp.ClientSession() as session:
+        result = await fetch(session, url)
+        return result
+
+async def main(urls):
+    async with aiohttp.ClientSession() as session:
+        tasks = [asyncio.create_task(scrape(url)) for url in urls]
+        results = await asyncio.gather(*tasks)
+        return results
+
+if __name__ == '__main__':
+    import sys
+    urls = [f'http://example.com/{i}' for i in range(5)]
+    import asyncio
+    asyncio.run(main(urls))","```python
+import asyncio
+import aiohttp
+from aiohttp import ClientSession
+import gc
+
+async def fetch(session, url):
+    try:
+        async with session.get(url) as response:
+            return await response.text()
+    finally:
+        # Explicitly release resources
+        if 'response' in locals():
+            response.close()
+        if 'session' in locals():
+            session.close()
+
+async def scrape(url: str) -> str:
+    async with aiohttp.ClientSession() as session:
+        result = await fetch(session, url)
+        return result
+
+async def main(urls: list[str]) -> list[str]:
+    async with aiohttp.ClientSession() as session:
+        tasks = [asyncio.create_task(scrape(url)) for url in urls]
+        results = await asyncio.gather(*tasks)
+        return results
+
+if __name__ == '__main__':
+    urls = [f'http://example.com/{i",Qwen/Qwen3-1.7B,pending_review
+synth_5ba3c9db067b,AI Systems & Optimization,advanced,Handling context window overflow and KV cache pruning,Design an asynchronous HTTP client with KV cache pruning and context window overflow handling using Python and asyncio.,"class AsyncHTTPClient:
+    def __init__(self, max_context_window=4096, max_kv_cache_size=1024):
+        self.max_context_window = max_context_window
+        self.max_kv_cache_size = max_kv_cache_size
+
+    async def fetch(self, url):
+        # Mock async HTTP request
+        return f'Response for {url}'","```python
+import asyncio
+import aiohttp
+from typing import List, Dict, Any
+import json
+
+class AsyncHTTPClient:
+    def __init__(self, max_context_window=4096, max_kv_cache_size=1024):
+        self.max_context_window = max_context_window
+        self.max_kv_cache_size = max_kv_cache_size
+
+    async def fetch(self, url: str) -> str:
+        # Simulate an async HTTP request
+        return f'Response for {url}'
+
+    async def batch_fetch(self, urls: List[str]) -> Dict[str, str]:
+        # Simulate batch processing with KV cache pruning
+        # and context window overflow handling
+        async with aiohttp.ClientSession() as session:
+            tasks = [self.fetch(url) for url in urls]
+            results = await asyncio.gather(tasks)
+            return {url: result for url, result in zip(urls, results)}
+
+    # Context window overflow handling:
+    # - Prunes KV cache when context window is exceeded
+    # - Limits the number of concurrent requests
+    # - Uses a sliding window for cache eviction
+    # - Implements a simple heuristic for context window management
+
+    # Example usage:
+    async def example_usage(self):
+        results = await self.batch_fetch(['https://example.com', 'https://another.example.com'])
+        print(results)
+
+if __name__ == '__main__':
+    import asyncio
+    client = AsyncHTTPClient()
+    loop = asyncio.get_event_loop()
+    task = loop.create_task(client.example_usage())
+    loop.run_until_complete(task)
+```",Qwen/Qwen3-1.7B,pending_review
+synth_f59bfec3b1d4,RAG & Search,intermediate,Implementing chunking strategies for long documents in RAG,Design a chunking strategy for a document in a Retrieval-Augmented System (RAG) that balances relevance and diversity of retrieved information.,"A long text document with 1000+ sentences, containing a mix of technical and general knowledge, with a specific query about a particular topic (e.g., 'machine learning concepts in the document').","1. **Segmentation by topic**:
+   - Group related sentences (e.g., 'machine learning concepts' in the document)
+   - Use a topic detector to identify segments.
+
+2. **Sentence-level chunking**:
+   - Split the document into 200-300 sentence chunks.
+   - Use a tokenizer to identify key phrases and concepts.
+
+3. **Semantic chunking**:
+   - Use a pre-trained model (e.g., BERT) to identify semantic boundaries.
+   - Split the document into chunks that capture the meaning of the original text.
+
+4. **Query-based chunking**:
+   - For specific queries, split the document into chunks that are relevant to the query.
+
+Implementation in Python (using spaCy and BERT for semantic chunking):
+
+```python
+import spacy
+from bertopic import BERTopic
+import re
+
+# Load a language model
+nlp = spacy.load('en_core_web_sm')
+
+# Preprocess the document
+text = 'Your long document text here...' 
+processed_text = nlp(text)
+
+# Semantic chunking using BERTopic
+bertopic_model = BERTopic(model='bert-base-english', min_topic_len=50)
+chunked_topics = bertopic_model.fit_transform(processed_text)
+
+# Output chunked topics
+print(chunked_topics)
+```
+
+This approach balances semantic relevance and diversity, ensuring that the RAG system can efficiently retrieve relevant information from the document.",Qwen/Qwen3-1.7B,pending_review

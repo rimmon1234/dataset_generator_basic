@@ -1,6 +1,7 @@
 """
 Prompts and seed topics for synthetic instruction dataset generation.
 Follows the Alpaca / Self-Instruct format with difficulty and category balancing.
+Strictly eliminates conversational filler (e.g., 'Here is...').
 """
 
 SEED_TOPICS = [
@@ -30,17 +31,18 @@ SEED_TOPICS = [
 ]
 
 GENERATOR_SYSTEM_PROMPT = """You are an expert AI dataset engineer specializing in high-quality instruction-tuning datasets.
-Your mission is to produce diverse, practical, and syntactically flawless training data for AI and software engineering."""
+Your mission is to produce diverse, practical, and direct training data for AI and software engineering.
+NEVER use conversational filler like 'Here is...', 'Sure!', or 'Below is the implementation'. Jump straight into the code or technical explanation."""
 
 GENERATOR_USER_TEMPLATE = """Generate a high-quality, practical synthetic instruction-tuning example based on the topic: "{topic}".
 
 Guidelines:
-1. Make the instruction specific, technical, and realistic (avoid generic tutorials).
+1. "instruction": Specific, technical, and realistic prompt.
 2. "category": Concise subject area (e.g., "Python Systems", "RAG & Search", "API Architecture").
 3. "difficulty": Strictly one of "beginner", "intermediate", or "advanced".
 4. "input": Context or code snippet to analyze/refactor, or empty string "" if self-contained.
-5. "output": A clear, complete answer with syntactically valid and runnable code.
-6. Output STRICTLY a valid JSON object with keys: "category", "difficulty", "instruction", "input", and "output".
+5. "output": High-density, professional answer. Jump DIRECTLY into the code or explanation. STRICTLY FORBIDDEN: Starting with conversational preambles like 'Here is...', 'Sure!', or 'Below is'.
+6. Output format: STRICTLY a valid JSON object with keys: "category", "difficulty", "instruction", "input", and "output".
 
 Example format:
 ```json
@@ -49,7 +51,7 @@ Example format:
   "difficulty": "intermediate",
   "instruction": "Refactor this synchronous function to use asyncio.gather for concurrent requests.",
   "input": "def fetch_all(urls):\\n    return [requests.get(url).text for url in urls]",
-  "output": "Here is the refactored asynchronous version using `aiohttp` and `asyncio.gather`:\\n\\n```python\\nimport asyncio\\nimport aiohttp\\n...\\n```"
+  "output": "```python\\nimport asyncio\\nimport aiohttp\\n\\nasync def fetch(session, url):\\n    async with session.get(url) as response:\\n        return await response.text()\\n\\nasync def fetch_all(urls):\\n    async with aiohttp.ClientSession() as session:\\n        tasks = [fetch(session, url) for url in urls]\\n        return await asyncio.gather(*tasks)\\n```\\n\\n### Key Architectural Improvements\\n- **Asynchronous I/O:** Concurrently executes non-blocking requests.\\n- **Connection Pooling:** `aiohttp.ClientSession` reuses underlying TCP sockets."
 }}
 ```
 
