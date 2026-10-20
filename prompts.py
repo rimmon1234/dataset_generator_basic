@@ -1,6 +1,6 @@
 """
 Prompts and seed topics for synthetic instruction dataset generation.
-Follows the Alpaca / Self-Instruct format.
+Follows the Alpaca / Self-Instruct format with difficulty and category balancing.
 """
 
 SEED_TOPICS = [
@@ -29,20 +29,24 @@ SEED_TOPICS = [
     "Cache invalidation patterns and stampede prevention"
 ]
 
-GENERATOR_SYSTEM_PROMPT = """You are an expert AI dataset creator specializing in high-quality instruction-tuning datasets (Alpaca format).
-Your job is to generate realistic, diverse, and challenging instruction-response pairs for software and AI engineering."""
+GENERATOR_SYSTEM_PROMPT = """You are an expert AI dataset engineer specializing in high-quality instruction-tuning datasets.
+Your mission is to produce diverse, practical, and syntactically flawless training data for AI and software engineering."""
 
 GENERATOR_USER_TEMPLATE = """Generate a high-quality, practical synthetic instruction-tuning example based on the topic: "{topic}".
 
 Guidelines:
-1. Make the instruction specific, technical, and realistic (not generic).
-2. "input" should contain context or code snippet if relevant, or be empty string "" if the instruction is self-contained.
-3. "output" must be a clear, well-explained, complete answer with accurate code/examples.
-4. Output STRICTLY a valid JSON object with keys: "instruction", "input", and "output". Do NOT include any commentary outside the JSON.
+1. Make the instruction specific, technical, and realistic (avoid generic tutorials).
+2. "category": Concise subject area (e.g., "Python Systems", "RAG & Search", "API Architecture").
+3. "difficulty": Strictly one of "beginner", "intermediate", or "advanced".
+4. "input": Context or code snippet to analyze/refactor, or empty string "" if self-contained.
+5. "output": A clear, complete answer with syntactically valid and runnable code.
+6. Output STRICTLY a valid JSON object with keys: "category", "difficulty", "instruction", "input", and "output".
 
 Example format:
 ```json
 {{
+  "category": "Python Systems",
+  "difficulty": "intermediate",
   "instruction": "Refactor this synchronous function to use asyncio.gather for concurrent requests.",
   "input": "def fetch_all(urls):\\n    return [requests.get(url).text for url in urls]",
   "output": "Here is the refactored asynchronous version using `aiohttp` and `asyncio.gather`:\\n\\n```python\\nimport asyncio\\nimport aiohttp\\n...\\n```"

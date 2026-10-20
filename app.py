@@ -17,7 +17,8 @@ if sys.platform == "win32":
 
 from loader import load_model_and_tokenizer, MODEL_ID
 from prompts import SEED_TOPICS, GENERATOR_SYSTEM_PROMPT, GENERATOR_USER_TEMPLATE
-from utils import extract_json, validate_alpaca_sample
+from utils import extract_json
+from validator import QualityControlValidator
 
 # Global state for cached model & tokenizer
 CACHED_MODEL = None
@@ -45,22 +46,74 @@ def load_dataset_records(file_path: str):
                     continue
     return records
 
+def save_all_records(file_path: str, records: list):
+    """Overwrites jsonl file with updated list of records."""
+    path = Path(file_path)
+    with open(path, "w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
 def load_dataset_dataframe(file_path: str):
     records = load_dataset_records(file_path)
     if not records:
-        return pd.DataFrame(columns=["ID", "Topic", "Instruction", "Input", "Output", "Model"])
+        return pd.DataFrame(columns=["ID", "Category", "Difficulty", "Instruction", "Input", "Output", "Status"])
     
     rows = []
     for r in records:
         rows.append({
             "ID": r.get("id", ""),
-            "Topic": r.get("seed_topic", ""),
+            "Category": r.get("category", r.get("seed_topic", "")),
+            "Difficulty": r.get("difficulty", "intermediate"),
             "Instruction": r.get("instruction", ""),
             "Input": r.get("input", ""),
             "Output": r.get("output", ""),
-            "Model": r.get("model_id", "")
+            "Status": r.get("review_status", "pending_review")
         })
     return pd.DataFrame(rows)
+
+def load_rejections_dataframe(file_path: str = "rejections.jsonl"):
+    records = load_dataset_records(file_path)
+    if not records:
+        return pd.DataFrame(columns=["Timestamp", "Topic", "Check Type", "Failure Reason"])
+    
+    rows = []
+    for r in records:
+        rows.append({
+            "Timestamp": r.get("timestamp", "")[:19],
+            "Topic": r.get("topic", ""),
+            "Check Type": r.get("check_type", ""),
+            "Failure Reason": r.get("reason", "")
+        })
+    return pd.DataFrame(rows)
+
+def compute_dataset_stats(file_path: str):
+    records = load_dataset_records(file_path)
+    if not records:
+        return "No records found.", pd.DataFrame(), pd.DataFrame()
+    
+    total = len(records)
+    approved = sum(1 for r in records if r.get("review_status") == "approved")
+    rejected = sum(1 for r in records if r.get("review_status") == "rejected")
+    pending = total - approved - rejected
+
+    diff_counts = {}
+    cat_counts = {}
+    for r in records:
+        d = r.get("difficulty", "intermediate")
+        c = r.get("category", "General")
+        diff_counts[d] = diff_counts.get(d, 0) + 1
+        cat_counts[c] = cat_counts.get(c, 0) + 1
+
+    summary_text = (
+        f"**Total Records:** {total} | "
+        f"✅ **Approved:** {approved} | "
+        f"⏳ **Pending Review:** {pending} | "
+        f"❌ **Rejected:** {rejected}"
+    )
+
+    diff_df = pd.DataFrame(list(diff_counts.items()), columns=["Difficulty", "Count"])
+    cat_df = pd.DataFrame(list(cat_counts.items()), columns=["Category", "Count"])
+    return summary_text, diff_df, cat_df
 
 def generate_sample_core(model, tokenizer, topic: str, max_tokens: int, temperature: float):
     user_prompt = GENERATOR_USER_TEMPLATE.format(topic=topic)
@@ -98,9 +151,7 @@ def generate_sample_core(model, tokenizer, topic: str, max_tokens: int, temperat
     tokens = output_ids[0][inputs.input_ids.shape[1]:]
     raw_response = tokenizer.decode(tokens, skip_special_tokens=True)
     parsed = extract_json(raw_response)
-    if parsed and validate_alpaca_sample(parsed):
-        return parsed, raw_response
-    return None, raw_response
+    return parsed, raw_response
 
 def run_gradio_generation(
     topic_choice: str,
@@ -109,18 +160,15 @@ def run_gradio_generation(
     temperature: float,
     max_tokens: int,
     output_filename: str,
+    rejections_filename: str,
     progress=gr.Progress(track_tqdm=True)
 ):
     output_path = Path(output_filename.strip() or "synthetic_dataset.jsonl")
-    
-    # Load existing entries for deduplication
-    existing_records = load_dataset_records(str(output_path))
-    seen_keys = {
-        (r.get("instruction", "").strip().lower(), r.get("input", "").strip().lower())
-        for r in existing_records
-    }
+    rejections_path = Path(rejections_filename.strip() or "rejections.jsonl")
 
-    # Determine topic source
+    validator = QualityControlValidator(rejection_log_path=str(rejections_path))
+    validator.load_existing_dataset(str(output_path))
+
     base_topic = custom_topic.strip() if custom_topic.strip() else topic_choice
     use_random_seed = (base_topic == "Random from Seed List" or not base_topic)
 
@@ -128,19 +176,15 @@ def run_gradio_generation(
 
     valid_count = 0
     attempt = 0
-    max_attempts = num_samples * 4
+    max_attempts = num_samples * 5
     topics_pool = SEED_TOPICS.copy()
     random.shuffle(topics_pool)
 
-    status_log = f"Started generation of {num_samples} sample(s)...\n"
+    status_log = f"=== Starting QC-Enforced Generation ({num_samples} target samples) ===\n"
     yield (
-        status_log,
-        "",  # latest id
-        "",  # latest topic
-        "",  # latest instruction
-        "",  # latest input
-        "",  # latest output
+        status_log, "", "", "", "", "", "",
         load_dataset_dataframe(str(output_path)),
+        load_rejections_dataframe(str(rejections_path)),
         str(output_path) if output_path.exists() else None
     )
 
@@ -150,73 +194,114 @@ def run_gradio_generation(
 
         progress((valid_count) / num_samples, desc=f"Generating sample {valid_count + 1}/{num_samples} (Attempt {attempt})")
         status_log += f"Attempt {attempt}: Querying topic '{current_topic[:30]}'...\n"
-        
-        sample, raw_output = generate_sample_core(model, tokenizer, current_topic, int(max_tokens), float(temperature))
 
-        if not sample:
-            status_log += f"⚠️ Attempt {attempt}: Model response was not valid JSON. Retrying...\n"
+        parsed, raw_output = generate_sample_core(model, tokenizer, current_topic, int(max_tokens), float(temperature))
+
+        if not parsed:
+            reason = "Malformed JSON / unparseable output"
+            validator.log_rejection(raw_output, reason, "json_parse_error", current_topic)
+            status_log += f"❌ QC Rejected (Attempt {attempt}): {reason}\n"
             yield (
-                status_log, "", "", "", "", "",
+                status_log, "", "", "", "", "", "",
                 load_dataset_dataframe(str(output_path)),
+                load_rejections_dataframe(str(rejections_path)),
                 str(output_path) if output_path.exists() else None
             )
             continue
 
-        dedup_key = (
-            sample.get("instruction", "").strip().lower(),
-            sample.get("input", "").strip().lower()
-        )
+        # Run Quality Control Checks (Schema, AST code syntax, deduplication, refusals)
+        is_valid, failure_reason = validator.validate(parsed, raw_output, topic=current_topic)
 
-        if dedup_key in seen_keys:
-            status_log += f"⚠️ Attempt {attempt}: Duplicate instruction detected. Skipping...\n"
+        if not is_valid:
+            status_log += f"❌ QC Rejected (Attempt {attempt}): {failure_reason}\n"
             yield (
-                status_log, "", "", "", "", "",
+                status_log, "", "", "", "", "", "",
                 load_dataset_dataframe(str(output_path)),
+                load_rejections_dataframe(str(rejections_path)),
                 str(output_path) if output_path.exists() else None
             )
             continue
 
-        seen_keys.add(dedup_key)
         valid_count += 1
         sample_id = f"synth_{uuid.uuid4().hex[:12]}"
 
         enriched = {
             "id": sample_id,
             "model_id": MODEL_ID,
+            "category": parsed.get("category", current_topic),
+            "difficulty": parsed.get("difficulty", "intermediate"),
             "seed_topic": current_topic,
-            "instruction": sample["instruction"].strip(),
-            "input": sample.get("input", "").strip(),
-            "output": sample["output"].strip()
+            "instruction": parsed["instruction"].strip(),
+            "input": parsed.get("input", "").strip(),
+            "output": parsed["output"].strip(),
+            "review_status": "pending_review"
         }
 
-        # Save immediately to file
         with open(output_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(enriched, ensure_ascii=False) + "\n")
 
-        status_log += f"✅ Success ({valid_count}/{num_samples}): Generated sample {sample_id}\n"
+        status_log += f"✅ QC Passed ({valid_count}/{num_samples}): Generated sample {sample_id} [Category: {enriched['category']}, Diff: {enriched['difficulty']}]\n"
 
         yield (
             status_log,
             sample_id,
-            current_topic,
+            enriched["category"],
+            enriched["difficulty"],
             enriched["instruction"],
             enriched["input"],
             enriched["output"],
             load_dataset_dataframe(str(output_path)),
+            load_rejections_dataframe(str(rejections_path)),
             str(output_path)
         )
 
-    status_log += f"\n🎉 Finished! Generated {valid_count} unique sample(s). Saved to {output_path}.\n"
+    status_log += f"\n🎉 Finished! Generated {valid_count} quality-verified sample(s). Saved to {output_path}.\n"
     yield (
         status_log,
         sample_id if valid_count > 0 else "",
-        current_topic if valid_count > 0 else "",
+        enriched["category"] if valid_count > 0 else "",
+        enriched["difficulty"] if valid_count > 0 else "",
         enriched["instruction"] if valid_count > 0 else "",
         enriched["input"] if valid_count > 0 else "",
         enriched["output"] if valid_count > 0 else "",
         load_dataset_dataframe(str(output_path)),
+        load_rejections_dataframe(str(rejections_path)),
         str(output_path) if output_path.exists() else None
     )
+
+# Human Review Functions
+def get_sample_for_review(file_path: str, index: int):
+    records = load_dataset_records(file_path)
+    if not records:
+        return "No records found in dataset.", "", "", "", "", "", 0, "No records"
+    
+    idx = max(0, min(index, len(records) - 1))
+    sample = records[idx]
+    
+    status_badge = f"Status: {sample.get('review_status', 'pending_review').upper()} (Sample {idx + 1} of {len(records)})"
+    return (
+        sample.get("id", ""),
+        sample.get("category", ""),
+        sample.get("difficulty", "intermediate"),
+        sample.get("instruction", ""),
+        sample.get("input", ""),
+        sample.get("output", ""),
+        idx,
+        status_badge
+    )
+
+def update_sample_review(file_path: str, index: int, new_status: str, edited_inst: str, edited_inp: str, edited_out: str):
+    records = load_dataset_records(file_path)
+    if not records or index >= len(records):
+        return "Failed to update: index out of range."
+    
+    records[index]["review_status"] = new_status
+    records[index]["instruction"] = edited_inst.strip()
+    records[index]["input"] = edited_inp.strip()
+    records[index]["output"] = edited_out.strip()
+    
+    save_all_records(file_path, records)
+    return f"Sample {records[index].get('id')} marked as '{new_status}' and updated."
 
 def export_as_json(file_path: str):
     records = load_dataset_records(file_path)
@@ -231,17 +316,17 @@ def export_as_json(file_path: str):
 def create_ui():
     topic_options = ["Random from Seed List"] + SEED_TOPICS
 
-    with gr.Blocks(title="Synthetic Dataset Generator") as demo:
+    with gr.Blocks(title="Synthetic Dataset Generator Studio") as demo:
         gr.Markdown(
             f"""
             # 🧠 Synthetic Dataset Generator Studio
-            Generate high-quality instruction-tuning datasets (Alpaca format) powered by **{MODEL_ID}** in 4-bit NF4 precision.
+            *High-quality instruction dataset generation with strict multi-tier Quality Control (Schema, AST Code Syntax, Deduplication, and Balance Tracking).*
             """
         )
 
         with gr.Tabs():
             # TAB 1: GENERATE
-            with gr.TabItem("⚡ Generate Dataset"):
+            with gr.TabItem("⚡ Quality-Controlled Generator"):
                 with gr.Row():
                     with gr.Column(scale=1):
                         gr.Markdown("### ⚙️ Generation Controls")
@@ -252,86 +337,122 @@ def create_ui():
                         )
                         custom_topic_box = gr.Textbox(
                             label="Custom Topic (Overrides dropdown if entered)",
-                            placeholder="e.g. Fine-tuning vision-language models with LoRA...",
+                            placeholder="e.g. Distributed tracing in microservices...",
                             lines=2
                         )
                         num_samples_slider = gr.Slider(
-                            minimum=1,
-                            maximum=20,
-                            value=2,
-                            step=1,
-                            label="Number of Samples to Generate"
+                            minimum=1, maximum=20, value=2, step=1,
+                            label="Number of Valid Samples to Generate"
                         )
                         temperature_slider = gr.Slider(
-                            minimum=0.1,
-                            maximum=1.2,
-                            value=0.7,
-                            step=0.05,
-                            label="Temperature (Diversity)"
+                            minimum=0.1, maximum=1.2, value=0.7, step=0.05,
+                            label="Temperature (Creativity)"
                         )
                         max_tokens_slider = gr.Slider(
-                            minimum=256,
-                            maximum=1536,
-                            value=896,
-                            step=64,
+                            minimum=256, maximum=1536, value=896, step=64,
                             label="Max Output Tokens"
                         )
-                        output_file_box = gr.Textbox(
-                            label="Save Target (.jsonl)",
-                            value="synthetic_dataset.jsonl"
-                        )
-                        gen_button = gr.Button("🚀 Generate Samples", variant="primary", size="lg")
+                        with gr.Row():
+                            output_file_box = gr.Textbox(label="Dataset Target (.jsonl)", value="synthetic_dataset.jsonl", scale=1)
+                            rejections_file_box = gr.Textbox(label="Rejections Log (.jsonl)", value="rejections.jsonl", scale=1)
+                        gen_button = gr.Button("🚀 Generate Validated Samples", variant="primary", size="lg")
 
                     with gr.Column(scale=2):
-                        gr.Markdown("### 📝 Latest Generated Example")
+                        gr.Markdown("### 📝 Latest Verified Sample")
                         with gr.Group():
                             with gr.Row():
                                 out_id = gr.Textbox(label="Sample ID", interactive=False, scale=1)
-                                out_topic = gr.Textbox(label="Seed Topic", interactive=False, scale=2)
+                                out_category = gr.Textbox(label="Category", interactive=False, scale=1)
+                                out_difficulty = gr.Textbox(label="Difficulty", interactive=False, scale=1)
                             out_instruction = gr.Textbox(label="Instruction", lines=3, interactive=False)
                             out_input = gr.Textbox(label="Input Context (Optional)", lines=3, interactive=False)
                             out_response = gr.Textbox(label="Generated Output Response", lines=8, interactive=False)
 
-                        log_box = gr.Textbox(label="Execution Logs", lines=5, interactive=False)
+                        log_box = gr.Textbox(label="Execution & QC Logs", lines=5, interactive=False)
 
-            # TAB 2: EXPLORE & EXPORT
-            with gr.TabItem("📊 Dataset Explorer & Export"):
-                gr.Markdown("### 🗃️ Stored Dataset Samples")
+            # TAB 2: HUMAN REVIEW & QUALITY AUDIT
+            with gr.TabItem("🕵️ Human Review & Quality Audit"):
+                gr.Markdown(
+                    """
+                    ### 🔍 Human-in-the-Loop Review
+                    *Plausible-sounding output can still have subtle bugs. Review, edit, or reject samples directly below.*
+                    """
+                )
                 with gr.Row():
-                    explorer_file_box = gr.Textbox(
-                        label="Dataset File to View",
-                        value="synthetic_dataset.jsonl",
-                        scale=3
-                    )
-                    refresh_btn = gr.Button("🔄 Refresh Table", scale=1)
+                    review_file_box = gr.Textbox(label="Dataset File to Review", value="synthetic_dataset.jsonl", scale=2)
+                    review_index_slider = gr.Number(label="Sample Index (0-based)", value=0, precision=0, scale=1)
+                    load_review_btn = gr.Button("📂 Load Sample", scale=1)
 
+                review_status_badge = gr.Markdown("Status: PENDING_REVIEW")
+                
+                with gr.Group():
+                    with gr.Row():
+                        rev_id = gr.Textbox(label="Sample ID", interactive=False, scale=1)
+                        rev_cat = gr.Textbox(label="Category", interactive=False, scale=1)
+                        rev_diff = gr.Textbox(label="Difficulty", interactive=False, scale=1)
+                    rev_inst = gr.Textbox(label="Instruction (Editable)", lines=3)
+                    rev_inp = gr.Textbox(label="Input Context (Editable)", lines=3)
+                    rev_out = gr.Textbox(label="Output Response (Editable)", lines=8)
+
+                with gr.Row():
+                    approve_btn = gr.Button("✅ Approve & Save", variant="primary", size="lg")
+                    reject_btn = gr.Button("❌ Reject & Flag", variant="stop", size="lg")
+                    save_edit_btn = gr.Button("💾 Save Edits (Keep Pending)", size="lg")
+
+                review_feedback_box = gr.Markdown("")
+
+            # TAB 3: DATASET EXPLORER, BALANCE & REJECTIONS
+            with gr.TabItem("📊 Explorer, Balance & Rejections"):
+                with gr.Row():
+                    explorer_file_box = gr.Textbox(label="Dataset File", value="synthetic_dataset.jsonl", scale=3)
+                    refresh_btn = gr.Button("🔄 Refresh All Data", scale=1)
+
+                stats_markdown = gr.Markdown("**Dataset Metrics:** Loading...")
+                with gr.Row():
+                    difficulty_table = gr.Dataframe(label="Difficulty Distribution", interactive=False)
+                    category_table = gr.Dataframe(label="Category Distribution", interactive=False)
+
+                gr.Markdown("### 🗃️ Accepted Dataset Samples")
                 dataset_table = gr.Dataframe(
                     value=load_dataset_dataframe("synthetic_dataset.jsonl"),
-                    headers=["ID", "Topic", "Instruction", "Input", "Output", "Model"],
+                    headers=["ID", "Category", "Difficulty", "Instruction", "Input", "Output", "Status"],
                     wrap=True,
                     interactive=False
                 )
 
-                gr.Markdown("### 💾 Download & Export")
+                gr.Markdown("### 🚫 Rejection Log (Failure Analysis)")
+                rejections_table = gr.Dataframe(
+                    value=load_rejections_dataframe("rejections.jsonl"),
+                    headers=["Timestamp", "Topic", "Check Type", "Failure Reason"],
+                    wrap=True,
+                    interactive=False
+                )
+
+                gr.Markdown("### 💾 Export")
                 with gr.Row():
                     download_jsonl_btn = gr.Button("📥 Download as JSONL")
                     download_json_btn = gr.Button("📥 Export as Formatted JSON")
 
                 file_download_component = gr.File(label="Download File", interactive=False)
 
-            # TAB 3: SYSTEM INFO
-            with gr.TabItem("🖥️ System & Hardware"):
+            # TAB 4: SYSTEM INFO
+            with gr.TabItem("🖥️ System & Rules"):
                 gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No GPU Detected"
                 vram_total = f"{torch.cuda.get_device_properties(0).total_memory / (1024**3):.2f} GB" if torch.cuda.is_available() else "N/A"
                 gr.Markdown(
                     f"""
+                    ### 🛡️ Active Quality Control Rules
+                    1. **Schema Validation:** Verifies required fields (`instruction`, `input`, `output`, `difficulty`, `category`).
+                    2. **Code Syntax Verification:** Parses code blocks via `ast.parse()` to guarantee syntax error-free Python code.
+                    3. **Deduplication:** Exact match and word-level Jaccard token overlap checks (>85% similarity rejected).
+                    4. **Refusal Filtering:** Flags canned LLM disclaimers (*"As an AI model..."*).
+                    5. **Degeneration Prevention:** Detects repeating loop artifacts in outputs.
+                    6. **Diagnostic Rejection Log:** Logs all rejected generations into `rejections.jsonl` with failure reasons.
+
                     ### 💻 Hardware & Model Configuration
-                    - **Active Model:** `{MODEL_ID}`
-                    - **Quantization:** 4-bit NormalFloat4 (NF4) with Double Quant
-                    - **Compute Precision:** `{'bfloat16' if torch.cuda.is_bf16_supported() else 'float16'}`
+                    - **Model:** `{MODEL_ID}` (4-bit NF4 Quantization)
                     - **Detected GPU:** `{gpu_name}`
-                    - **Total VRAM:** `{vram_total}`
-                    - **Deduplication:** Active on `(instruction, input)`
+                    - **VRAM Total:** `{vram_total}`
                     """
                 )
 
@@ -344,24 +465,67 @@ def create_ui():
                 num_samples_slider,
                 temperature_slider,
                 max_tokens_slider,
-                output_file_box
+                output_file_box,
+                rejections_file_box
             ],
             outputs=[
                 log_box,
                 out_id,
-                out_topic,
+                out_category,
+                out_difficulty,
                 out_instruction,
                 out_input,
                 out_response,
                 dataset_table,
+                rejections_table,
                 file_download_component
             ]
         )
 
+        # Human Review Events
+        load_review_btn.click(
+            fn=get_sample_for_review,
+            inputs=[review_file_box, review_index_slider],
+            outputs=[rev_id, rev_cat, rev_diff, rev_inst, rev_inp, rev_out, review_index_slider, review_status_badge]
+        )
+
+        approve_btn.click(
+            fn=lambda f, i, inst, inp, out: update_sample_review(f, int(i), "approved", inst, inp, out),
+            inputs=[review_file_box, review_index_slider, rev_inst, rev_inp, rev_out],
+            outputs=[review_feedback_box]
+        ).then(
+            fn=get_sample_for_review,
+            inputs=[review_file_box, review_index_slider],
+            outputs=[rev_id, rev_cat, rev_diff, rev_inst, rev_inp, rev_out, review_index_slider, review_status_badge]
+        )
+
+        reject_btn.click(
+            fn=lambda f, i, inst, inp, out: update_sample_review(f, int(i), "rejected", inst, inp, out),
+            inputs=[review_file_box, review_index_slider, rev_inst, rev_inp, rev_out],
+            outputs=[review_feedback_box]
+        ).then(
+            fn=get_sample_for_review,
+            inputs=[review_file_box, review_index_slider],
+            outputs=[rev_id, rev_cat, rev_diff, rev_inst, rev_inp, rev_out, review_index_slider, review_status_badge]
+        )
+
+        save_edit_btn.click(
+            fn=lambda f, i, inst, inp, out: update_sample_review(f, int(i), "pending_review", inst, inp, out),
+            inputs=[review_file_box, review_index_slider, rev_inst, rev_inp, rev_out],
+            outputs=[review_feedback_box]
+        )
+
+        # Refresh Explorer
+        def refresh_all(file_path):
+            df = load_dataset_dataframe(file_path)
+            rej_df = load_rejections_dataframe("rejections.jsonl")
+            stats_text, diff_df, cat_df = compute_dataset_stats(file_path)
+            return df, rej_df, stats_text, diff_df, cat_df
+
         refresh_btn.click(
-            fn=load_dataset_dataframe,
+            fn=refresh_all,
             inputs=[explorer_file_box],
-            outputs=[dataset_table]
+            outputs=[dataset_table, rejections_table, stats_markdown, difficulty_table, category_table]
         )
 
         download_jsonl_btn.click(
