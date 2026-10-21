@@ -18,7 +18,7 @@ def draw_bar(count: int, total: int, width: int = 30) -> str:
     percentage = (count / total) * 100
     return f"{'█' * filled}{'░' * (width - filled)} {percentage:5.1f}% ({count})"
 
-def visualize(file_path: str = "synthetic_dataset.jsonl", rejections_path: str = "rejections.jsonl"):
+def visualize(file_path: str = "data/synthetic_dataset.jsonl", rejections_path: str = "data/rejections.jsonl"):
     data_path = Path(file_path)
     if not data_path.exists():
         print(f"Error: {file_path} not found.")
@@ -98,5 +98,5 @@ def visualize(file_path: str = "synthetic_dataset.jsonl", rejections_path: str =
     print("=" * 70)
 
 if __name__ == "__main__":
-    target = sys.argv[1] if len(sys.argv) > 1 else "synthetic_dataset.jsonl"
+    target = sys.argv[1] if len(sys.argv) > 1 else "data/synthetic_dataset.jsonl"
     visualize(target)

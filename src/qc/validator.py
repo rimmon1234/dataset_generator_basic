@@ -56,7 +56,7 @@ def check_repetition(text: str, max_repeated_lines: int = 2) -> bool:
     for line in lines:
         seen[line] = seen.get(line, 0) + 1
         if seen[line] > max_repeated_lines:
-            return False  # Degenerative loop detected
+            return False
     return True
 
 def calculate_token_jaccard(s1: str, s2: str) -> float:
@@ -70,7 +70,7 @@ def calculate_token_jaccard(s1: str, s2: str) -> float:
     return len(intersection) / len(union)
 
 class QualityControlValidator:
-    def __init__(self, rejection_log_path: str = "rejections.jsonl"):
+    def __init__(self, rejection_log_path: str = "data/rejections.jsonl"):
         self.rejection_log_path = Path(rejection_log_path)
         self.seen_exact_keys: Set[Tuple[str, str]] = set()
         self.seen_instructions: List[str] = []
@@ -96,12 +96,13 @@ class QualityControlValidator:
 
     def log_rejection(self, raw_output: str, reason: str, check_type: str, topic: str = "Unknown"):
         """Logs rejected samples for failure diagnosis."""
+        self.rejection_log_path.parent.mkdir(parents=True, exist_ok=True)
         entry = {
             "timestamp": datetime.now().isoformat(),
             "topic": topic,
             "check_type": check_type,
             "reason": reason,
-            "raw_output": raw_output[:1000]  # Store preview
+            "raw_output": raw_output[:1000]
         }
         with open(self.rejection_log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
@@ -140,7 +141,6 @@ class QualityControlValidator:
         output = sample["output"].strip()
         sample["input"] = input_text
 
-        # Validate difficulty & category (assign defaults if absent)
         difficulty = sample.get("difficulty", "intermediate").lower().strip()
         if difficulty not in VALID_DIFFICULTIES:
             difficulty = "intermediate"
@@ -181,7 +181,6 @@ class QualityControlValidator:
             self.log_rejection(raw_output, reason, "exact_deduplication", topic)
             return False, reason
 
-        # Check near-duplicate Jaccard similarity against recent instructions
         for prev_inst in self.seen_instructions[-100:]:
             similarity = calculate_token_jaccard(instruction, prev_inst)
             if similarity >= similarity_threshold:

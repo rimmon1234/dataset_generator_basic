@@ -16,10 +16,10 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from loader import load_model_and_tokenizer, MODEL_ID
-from prompts import SEED_TOPICS, GENERATOR_SYSTEM_PROMPT, GENERATOR_USER_TEMPLATE
-from utils import extract_json
-from validator import QualityControlValidator
+from .loader import load_model_and_tokenizer, MODEL_ID
+from .prompts import SEED_TOPICS, GENERATOR_SYSTEM_PROMPT, GENERATOR_USER_TEMPLATE
+from ..qc.utils import extract_json
+from ..qc.validator import QualityControlValidator
 
 def generate_sample(model, tokenizer, topic: str, max_new_tokens: int = 896, temperature: float = 0.7):
     """
@@ -32,7 +32,6 @@ def generate_sample(model, tokenizer, topic: str, max_new_tokens: int = 896, tem
     ]
 
     try:
-        # Disable thinking tokens for direct JSON generation
         prompt_text = tokenizer.apply_chat_template(
             messages,
             tokenize=False,
@@ -58,7 +57,6 @@ def generate_sample(model, tokenizer, topic: str, max_new_tokens: int = 896, tem
             pad_token_id=tokenizer.pad_token_id
         )
 
-    # Decode only the newly generated response tokens
     generated_tokens = output_ids[0][inputs.input_ids.shape[1]:]
     raw_response = tokenizer.decode(generated_tokens, skip_special_tokens=True)
     parsed = extract_json(raw_response)
@@ -67,8 +65,8 @@ def generate_sample(model, tokenizer, topic: str, max_new_tokens: int = 896, tem
 
 def run_generator(
     total_samples: int = 5,
-    output_path: str = "synthetic_dataset.jsonl",
-    rejections_path: str = "rejections.jsonl",
+    output_path: str = "data/synthetic_dataset.jsonl",
+    rejections_path: str = "data/rejections.jsonl",
     max_new_tokens: int = 896,
     temperature: float = 0.7,
     model_id: str = MODEL_ID
@@ -80,6 +78,7 @@ def run_generator(
     print(f"Rejection Log:  {rejections_path}")
 
     output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
     
     # Initialize QC Validator and pre-populate deduplication cache
     validator = QualityControlValidator(rejection_log_path=rejections_path)
@@ -96,7 +95,6 @@ def run_generator(
     rejection_reasons = {}
     max_attempts = total_samples * 5
 
-    # Shuffle seed topics pool
     topics_pool = SEED_TOPICS.copy()
     random.shuffle(topics_pool)
 
@@ -121,7 +119,6 @@ def run_generator(
             tqdm.write(f"[QC REJECT] Attempt {attempt_count}: {reason} for '{topic[:25]}'")
             continue
 
-        # --- Comprehensive Quality Control Validation ---
         is_valid, failure_reason = validator.validate(parsed, raw_output, topic=topic)
 
         if not is_valid:
@@ -129,7 +126,6 @@ def run_generator(
             tqdm.write(f"[QC REJECT] Attempt {attempt_count}: {failure_reason}")
             continue
 
-        # Passed all QC checks! Enrich with unique ID and model metadata
         sample_id = f"synth_{uuid.uuid4().hex[:12]}"
         enriched_sample = {
             "id": sample_id,
@@ -140,12 +136,11 @@ def run_generator(
             "instruction": parsed["instruction"].strip(),
             "input": parsed.get("input", "").strip(),
             "output": parsed["output"].strip(),
-            "review_status": "pending_review"  # Ready for human review
+            "review_status": "pending_review"
         }
 
         valid_count += 1
 
-        # Append immediately to file so no progress is lost
         with open(output_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(enriched_sample, ensure_ascii=False) + "\n")
 
@@ -176,8 +171,8 @@ def run_generator(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Synthetic Instruction Dataset Generator with Quality Control")
     parser.add_argument("--samples", type=int, default=5, help="Number of valid samples to generate")
-    parser.add_argument("--output", type=str, default="synthetic_dataset.jsonl", help="Output JSONL filepath")
-    parser.add_argument("--rejections", type=str, default="rejections.jsonl", help="Rejections log filepath")
+    parser.add_argument("--output", type=str, default="data/synthetic_dataset.jsonl", help="Output JSONL filepath")
+    parser.add_argument("--rejections", type=str, default="data/rejections.jsonl", help="Rejections log filepath")
     parser.add_argument("--max-tokens", type=int, default=896, help="Max new tokens per generation")
     parser.add_argument("--temperature", type=float, default=0.7, help="Sampling temperature")
 

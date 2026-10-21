@@ -417,3 +417,35 @@ print(chunked_topics)
 ```
 
 This approach balances semantic relevance and diversity, ensuring that the RAG system can efficiently retrieve relevant information from the document.",Qwen/Qwen3-1.7B,pending_review
+synth_4b16d5436c8e,Security & Threat Intelligence,advanced,"Email spam and phishing classification: Analyze an incoming email, classify it strictly as SPAM, PHISHING, or HAM (legitimate), identify specific red flags (spoofed domains, artificial urgency, credential harvesting links), and provide a recommended defensive action.","Classify the following email as SPAM, PHISHING, or HAM, identify red flags such as spoofed domains, artificial urgency, and credential harvesting links, and provide a recommended defensive action.","Subject: Urgent: Your account is at risk - Login now
+
+Dear User,
+We have detected suspicious activity on your account. Please log in immediately to secure your account.
+[Click here to log in]
+Best regards,
+The Secure Team
+spoofed-domain@example.com","```python
+# Email classification and analysis
+
+# Red flags
+red_flags = [
+    'Urgent: Your account is at risk - Login now',
+    'Click here to log in',
+    'spoofed-domain@example.com'
+]
+
+# Classification
+classification = 'PHISHING'
+
+# Defensive action
+defensive_action = 'Verify the legitimacy of the link, use two-factor authentication, and monitor account activity.'
+
+# Output
+{
+    ""classification"": ""PHISHING"",
+    ""red_flags"": [
+        ""Urgent: Your account is at risk - Login now"",
+        ""Click here to log in"",
+        ""spoofed-domain@example.com""
+    ],
+    ""defensive_action"": ""Verify the legitimacy of the link, use two-factor authentication, and monitor account activity.""",Qwen/Qwen3-1.7B,pending_review

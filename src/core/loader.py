@@ -8,6 +8,10 @@ from transformers import (
 MODEL_ID = "Qwen/Qwen3-1.7B"
 
 def load_model_and_tokenizer(model_id: str = MODEL_ID):
+    """
+    Loads model in 4-bit NF4 quantization using bitsandbytes on CUDA.
+    Configures tokenizer with pad token and left-padding for generation.
+    """
     if not torch.cuda.is_available():
         raise RuntimeError(
             "NVIDIA CUDA GPU is required for 4-bit bitsandbytes quantization."
@@ -28,7 +32,6 @@ def load_model_and_tokenizer(model_id: str = MODEL_ID):
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     
-    # Ensure pad token exists and padding side is set to left for batched generation
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"

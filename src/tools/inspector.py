@@ -10,7 +10,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-def inspect(file_path: str = "synthetic_dataset.jsonl", max_show: int = 5):
+def inspect(file_path: str = "data/synthetic_dataset.jsonl", max_show: int = 5):
     path = Path(file_path)
     if not path.exists():
         print(f"Error: {file_path} not found.")
@@ -45,5 +45,5 @@ def inspect(file_path: str = "synthetic_dataset.jsonl", max_show: int = 5):
         print("=" * 65 + "\n")
 
 if __name__ == "__main__":
-    file_to_inspect = sys.argv[1] if len(sys.argv) > 1 else "synthetic_dataset.jsonl"
+    file_to_inspect = sys.argv[1] if len(sys.argv) > 1 else "data/synthetic_dataset.jsonl"
     inspect(file_to_inspect)

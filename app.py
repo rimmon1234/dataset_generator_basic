@@ -15,14 +15,21 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from loader import load_model_and_tokenizer, MODEL_ID
-from prompts import SEED_TOPICS, GENERATOR_SYSTEM_PROMPT, GENERATOR_USER_TEMPLATE
-from utils import extract_json
-from validator import QualityControlValidator
+# Ensure local package import
+sys.path.insert(0, str(Path(__file__).parent))
+
+from src.core.loader import load_model_and_tokenizer, MODEL_ID
+from src.core.prompts import SEED_TOPICS, GENERATOR_SYSTEM_PROMPT, GENERATOR_USER_TEMPLATE
+from src.qc.utils import extract_json
+from src.qc.validator import QualityControlValidator
+from src.tools.exporter import convert_jsonl_to_tabular
 
 # Global state for cached model & tokenizer
 CACHED_MODEL = None
 CACHED_TOKENIZER = None
+
+DEFAULT_DATASET_PATH = "data/synthetic_dataset.jsonl"
+DEFAULT_REJECTIONS_PATH = "data/rejections.jsonl"
 
 def get_model_and_tokenizer():
     global CACHED_MODEL, CACHED_TOKENIZER
@@ -49,6 +56,7 @@ def load_dataset_records(file_path: str):
 def save_all_records(file_path: str, records: list):
     """Overwrites jsonl file with updated list of records."""
     path = Path(file_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
@@ -71,7 +79,7 @@ def load_dataset_dataframe(file_path: str):
         })
     return pd.DataFrame(rows)
 
-def load_rejections_dataframe(file_path: str = "rejections.jsonl"):
+def load_rejections_dataframe(file_path: str = DEFAULT_REJECTIONS_PATH):
     records = load_dataset_records(file_path)
     if not records:
         return pd.DataFrame(columns=["Timestamp", "Topic", "Check Type", "Failure Reason"])
@@ -89,7 +97,11 @@ def load_rejections_dataframe(file_path: str = "rejections.jsonl"):
 def compute_dataset_stats(file_path: str):
     records = load_dataset_records(file_path)
     if not records:
-        return "No records found.", pd.DataFrame(), pd.DataFrame()
+        return (
+            "No records found in dataset yet.",
+            pd.DataFrame(columns=["Difficulty", "Count"]),
+            pd.DataFrame(columns=["Category", "Count"])
+        )
     
     total = len(records)
     approved = sum(1 for r in records if r.get("review_status") == "approved")
@@ -105,6 +117,7 @@ def compute_dataset_stats(file_path: str):
         cat_counts[c] = cat_counts.get(c, 0) + 1
 
     summary_text = (
+        f"### 📈 Dataset Summary\n"
         f"**Total Records:** {total} | "
         f"✅ **Approved:** {approved} | "
         f"⏳ **Pending Review:** {pending} | "
@@ -163,8 +176,10 @@ def run_gradio_generation(
     rejections_filename: str,
     progress=gr.Progress(track_tqdm=True)
 ):
-    output_path = Path(output_filename.strip() or "synthetic_dataset.jsonl")
-    rejections_path = Path(rejections_filename.strip() or "rejections.jsonl")
+    output_path = Path(output_filename.strip() or DEFAULT_DATASET_PATH)
+    rejections_path = Path(rejections_filename.strip() or DEFAULT_REJECTIONS_PATH)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    rejections_path.parent.mkdir(parents=True, exist_ok=True)
 
     validator = QualityControlValidator(rejection_log_path=str(rejections_path))
     validator.load_existing_dataset(str(output_path))
@@ -209,7 +224,6 @@ def run_gradio_generation(
             )
             continue
 
-        # Run Quality Control Checks (Schema, AST code syntax, deduplication, refusals)
         is_valid, failure_reason = validator.validate(parsed, raw_output, topic=current_topic)
 
         if not is_valid:
@@ -240,7 +254,7 @@ def run_gradio_generation(
         with open(output_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(enriched, ensure_ascii=False) + "\n")
 
-        status_log += f"✅ QC Passed ({valid_count}/{num_samples}): Generated sample {sample_id} [Category: {enriched['category']}, Diff: {enriched['difficulty']}]\n"
+        status_log += f"✅ QC Passed ({valid_count}/{num_samples}): Generated {sample_id} [{enriched['category']} | {enriched['difficulty']}]\n"
 
         yield (
             status_log,
@@ -313,7 +327,6 @@ def export_as_json(file_path: str):
     return str(export_path)
 
 def export_as_csv(file_path: str):
-    from export_tabular import convert_jsonl_to_tabular
     try:
         out = convert_jsonl_to_tabular(file_path, "csv")
         return str(out) if out else None
@@ -321,7 +334,6 @@ def export_as_csv(file_path: str):
         print(f"Error exporting CSV: {e}")
         return None
 
-# Build the Gradio UI
 def create_ui():
     topic_options = ["Random from Seed List"] + SEED_TOPICS
 
@@ -362,8 +374,8 @@ def create_ui():
                             label="Max Output Tokens"
                         )
                         with gr.Row():
-                            output_file_box = gr.Textbox(label="Dataset Target (.jsonl)", value="synthetic_dataset.jsonl", scale=1)
-                            rejections_file_box = gr.Textbox(label="Rejections Log (.jsonl)", value="rejections.jsonl", scale=1)
+                            output_file_box = gr.Textbox(label="Dataset Target (.jsonl)", value=DEFAULT_DATASET_PATH, scale=1)
+                            rejections_file_box = gr.Textbox(label="Rejections Log (.jsonl)", value=DEFAULT_REJECTIONS_PATH, scale=1)
                         gen_button = gr.Button("🚀 Generate Validated Samples", variant="primary", size="lg")
 
                     with gr.Column(scale=2):
@@ -388,7 +400,7 @@ def create_ui():
                     """
                 )
                 with gr.Row():
-                    review_file_box = gr.Textbox(label="Dataset File to Review", value="synthetic_dataset.jsonl", scale=2)
+                    review_file_box = gr.Textbox(label="Dataset File to Review", value=DEFAULT_DATASET_PATH, scale=2)
                     review_index_slider = gr.Number(label="Sample Index (0-based)", value=0, precision=0, scale=1)
                     load_review_btn = gr.Button("📂 Load Sample", scale=1)
 
@@ -413,10 +425,10 @@ def create_ui():
             # TAB 3: DATASET EXPLORER, BALANCE & REJECTIONS
             with gr.TabItem("📊 Explorer, Balance & Rejections"):
                 with gr.Row():
-                    explorer_file_box = gr.Textbox(label="Dataset File", value="synthetic_dataset.jsonl", scale=3)
+                    explorer_file_box = gr.Textbox(label="Dataset File", value=DEFAULT_DATASET_PATH, scale=3)
                     refresh_btn = gr.Button("🔄 Refresh All Data", scale=1)
 
-                stats_text, initial_diff_df, initial_cat_df = compute_dataset_stats("synthetic_dataset.jsonl")
+                stats_text, initial_diff_df, initial_cat_df = compute_dataset_stats(DEFAULT_DATASET_PATH)
                 stats_markdown = gr.Markdown(stats_text)
                 with gr.Row():
                     difficulty_plot = gr.BarPlot(
@@ -436,7 +448,7 @@ def create_ui():
 
                 gr.Markdown("### 🗃️ Accepted Dataset Samples")
                 dataset_table = gr.Dataframe(
-                    value=load_dataset_dataframe("synthetic_dataset.jsonl"),
+                    value=load_dataset_dataframe(DEFAULT_DATASET_PATH),
                     headers=["ID", "Category", "Difficulty", "Instruction", "Input", "Output", "Status"],
                     wrap=True,
                     interactive=False
@@ -444,7 +456,7 @@ def create_ui():
 
                 gr.Markdown("### 🚫 Rejection Log (Failure Analysis)")
                 rejections_table = gr.Dataframe(
-                    value=load_rejections_dataframe("rejections.jsonl"),
+                    value=load_rejections_dataframe(DEFAULT_REJECTIONS_PATH),
                     headers=["Timestamp", "Topic", "Check Type", "Failure Reason"],
                     wrap=True,
                     interactive=False
@@ -470,7 +482,7 @@ def create_ui():
                     3. **Deduplication:** Exact match and word-level Jaccard token overlap checks (>85% similarity rejected).
                     4. **Refusal Filtering:** Flags canned LLM disclaimers (*"As an AI model..."*).
                     5. **Degeneration Prevention:** Detects repeating loop artifacts in outputs.
-                    6. **Diagnostic Rejection Log:** Logs all rejected generations into `rejections.jsonl` with failure reasons.
+                    6. **Diagnostic Rejection Log:** Logs all rejected generations into `data/rejections.jsonl` with failure reasons.
 
                     ### 💻 Hardware & Model Configuration
                     - **Model:** `{MODEL_ID}` (4-bit NF4 Quantization)
@@ -505,7 +517,6 @@ def create_ui():
             ]
         )
 
-        # Human Review Events
         load_review_btn.click(
             fn=get_sample_for_review,
             inputs=[review_file_box, review_index_slider],
@@ -538,10 +549,9 @@ def create_ui():
             outputs=[review_feedback_box]
         )
 
-        # Refresh Explorer
         def refresh_all(file_path):
             df = load_dataset_dataframe(file_path)
-            rej_df = load_rejections_dataframe("rejections.jsonl")
+            rej_df = load_rejections_dataframe(DEFAULT_REJECTIONS_PATH)
             stats_text, diff_df, cat_df = compute_dataset_stats(file_path)
             return df, rej_df, stats_text, diff_df, cat_df
 
